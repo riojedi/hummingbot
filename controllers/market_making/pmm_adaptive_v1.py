@@ -57,11 +57,13 @@ class PMMAdaptiveV1Config(MarketMakingControllerConfigBase):
     # === Dynamic volatility spread (NATR) ===
     candles_connector: str = Field(
         default=None,
+        validate_default=True,
         json_schema_extra={
             "prompt": "Enter the connector for the candles data, leave empty to use the same exchange as the connector: ",
             "prompt_on_new": True})
     candles_trading_pair: str = Field(
         default=None,
+        validate_default=True,
         json_schema_extra={
             "prompt": "Enter the trading pair for the candles data, leave empty to use the same trading pair as the connector: ",
             "prompt_on_new": True})
