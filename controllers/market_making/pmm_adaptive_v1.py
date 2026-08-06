@@ -1,7 +1,7 @@
 from collections import deque
 from decimal import Decimal
 from statistics import median
-from typing import Deque, List, Tuple
+from typing import Deque, List, Tuple, Union
 
 import pandas_ta as ta  # noqa: F401
 from pydantic import Field, field_validator
@@ -51,6 +51,25 @@ class PMMAdaptiveV1Config(MarketMakingControllerConfigBase):
         default="1,2,4",
         json_schema_extra={
             "prompt": "Enter a comma-separated list of sell spreads measured in units of volatility (e.g., '1, 2'): ",
+            "prompt_on_new": True, "is_updatable": True}
+    )
+    # Re-declared (not just inherited) purely to add validate_default=True: the base class's own
+    # field_validator(mode="before") that fills these in as equal-weight lists across the configured spread
+    # levels only runs when a value is explicitly passed (even blank), not when the field is omitted
+    # entirely -- which is exactly what a config built programmatically (e.g. a backtest script's config
+    # dict) commonly does. Without this, get_spreads_and_amounts_in_quote() crashes on `sum(None)`.
+    buy_amounts_pct: Union[List[Decimal], None] = Field(
+        default=None,
+        validate_default=True,
+        json_schema_extra={
+            "prompt": "Enter a comma-separated list of buy amounts as percentages (e.g., '50, 50'), or leave blank to distribute equally: ",
+            "prompt_on_new": True, "is_updatable": True}
+    )
+    sell_amounts_pct: Union[List[Decimal], None] = Field(
+        default=None,
+        validate_default=True,
+        json_schema_extra={
+            "prompt": "Enter a comma-separated list of sell amounts as percentages (e.g., '50, 50'), or leave blank to distribute equally: ",
             "prompt_on_new": True, "is_updatable": True}
     )
 

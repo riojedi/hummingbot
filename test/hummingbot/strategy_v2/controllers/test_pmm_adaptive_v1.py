@@ -120,6 +120,27 @@ class TestPMMAdaptiveV1(IsolatedAsyncioWrapperTestCase):
         with self.assertRaises(pydantic.ValidationError):
             PMMAdaptiveV1Config(**base_kwargs, obi_collapse_threshold_pct=Decimal("0"))
 
+    def test_amounts_pct_defaults_to_equal_weight_when_omitted(self):
+        # Regression test: buy_amounts_pct/sell_amounts_pct must not stay None when a config is built
+        # programmatically (e.g. a backtest script's config dict) without passing them explicitly -- the
+        # base class's own equal-weight-default validator only runs on an explicit (even blank) value, not
+        # on an omitted field, unless validate_default=True is set (which is why we re-declare these fields).
+        config = PMMAdaptiveV1Config(
+            id="t", connector_name="binance", trading_pair="BTC-USDT", buy_spreads="1,2,4", sell_spreads="1,2")
+        self.assertEqual(config.buy_amounts_pct, [1, 1, 1])
+        self.assertEqual(config.sell_amounts_pct, [1, 1])
+
+    def test_get_spreads_and_amounts_in_quote_does_not_crash_when_amounts_omitted(self):
+        # Directly exercises the call path from the reported crash: create_actions_proposal() ->
+        # check_position_rebalance() -> config.get_required_base_amount() -> get_spreads_and_amounts_in_quote().
+        config = PMMAdaptiveV1Config(
+            id="t", connector_name="binance", trading_pair="BTC-USDT",
+            total_amount_quote=Decimal("1000"), buy_spreads="1,2", sell_spreads="1,2")
+        spreads, amounts_quote = config.get_spreads_and_amounts_in_quote(TradeType.SELL)
+        self.assertEqual(len(spreads), 2)
+        self.assertEqual(len(amounts_quote), 2)
+        self.assertTrue(all(amount > 0 for amount in amounts_quote))
+
     # --- Candles config ---
 
     def test_get_candles_config_returns_expected_config(self):
