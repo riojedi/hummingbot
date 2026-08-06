@@ -251,8 +251,20 @@ class PMMAdaptiveV1Controller(MarketMakingControllerBase):
         return max(min(raw_skew_pct, max_shift), -max_shift)
 
     def _get_depth_snapshot(self) -> Tuple[Decimal, Decimal]:
-        bids_df, asks_df = self.market_data_provider.get_order_book_snapshot(
-            self.config.connector_name, self.config.trading_pair)
+        """
+        Returns (0, 0) whenever a live order book snapshot isn't available for this connector/pair -- notably
+        during candle-driven backtesting (BacktestingDataProvider never subscribes to a real order book), but
+        also possible live/paper if a pair's book hasn't finished its initial WS subscription yet. Depth
+        history staying at 0 means `_compute_collapse_ratios` never sees a real baseline (its `> 0` guards
+        keep the ratio at 0), so the OBI fill-kill simply never fires rather than crashing the control loop --
+        it's a best-effort risk overlay on top of the NATR/inventory-skew logic, not something that should be
+        able to take the whole controller down.
+        """
+        try:
+            bids_df, asks_df = self.market_data_provider.get_order_book_snapshot(
+                self.config.connector_name, self.config.trading_pair)
+        except Exception:
+            return Decimal("0"), Decimal("0")
         n = self.config.obi_depth_levels
         bid_depth = Decimal(str(bids_df["amount"].iloc[:n].sum())) if not bids_df.empty else Decimal("0")
         ask_depth = Decimal(str(asks_df["amount"].iloc[:n].sum())) if not asks_df.empty else Decimal("0")

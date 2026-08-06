@@ -189,6 +189,30 @@ class TestPMMAdaptiveV1(IsolatedAsyncioWrapperTestCase):
         q = self.controller._get_inventory_deviation(Decimal("100"))
         self.assertEqual(q, Decimal("0"))
 
+    # --- Depth snapshot resilience (e.g. candle-driven backtesting has no live order book) ---
+
+    async def test_update_processed_data_survives_missing_order_book(self):
+        # Mirrors BacktestingDataProvider: no live order book subscription exists for the pair, so
+        # get_order_book_snapshot raises instead of returning data. NATR/inventory-skew must still complete.
+        candles = _build_candles_df()
+        self.mock_market_data_provider.get_candles_df = MagicMock(return_value=candles)
+        self.mock_market_data_provider.get_order_book_snapshot = MagicMock(
+            side_effect=ValueError("No order book exists for 'BTC-USDT'."))
+
+        await self.controller.update_processed_data()
+
+        self.assertEqual(self.controller.processed_data["bid_depth"], Decimal("0"))
+        self.assertEqual(self.controller.processed_data["ask_depth"], Decimal("0"))
+        self.assertIn("reference_price", self.controller.processed_data)
+        self.assertIn("spread_multiplier", self.controller.processed_data)
+
+    def test_get_depth_snapshot_returns_zero_on_missing_order_book(self):
+        self.mock_market_data_provider.get_order_book_snapshot = MagicMock(
+            side_effect=ValueError("No order book exists for 'BTC-USDT'."))
+        bid_depth, ask_depth = self.controller._get_depth_snapshot()
+        self.assertEqual(bid_depth, Decimal("0"))
+        self.assertEqual(ask_depth, Decimal("0"))
+
     # --- OBI fill-kill ---
 
     def _seed_obi_history(self, baseline_bid: Decimal, baseline_ask: Decimal, current_bid: Decimal, current_ask: Decimal,

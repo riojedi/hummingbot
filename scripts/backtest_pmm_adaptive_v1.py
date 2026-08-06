@@ -1,10 +1,12 @@
 """
 Backtest pmm_adaptive_v1 (NATR dynamic spreads + Avellaneda-Stoikov inventory skew) with optional chart output.
 
-IMPORTANT LIMITATION: BacktestingEngineBase is driven entirely by historical candles and has no order book
-depth history, so the third feature of this controller -- the order book imbalance (OBI) fill-kill in
-`executors_to_early_stop` -- is NEVER exercised by this backtest. This script only validates the NATR
-dynamic-spread and inventory-skew logic. Validate the OBI fill-kill path via
+IMPORTANT LIMITATION: BacktestingEngineBase is driven entirely by historical candles and never subscribes to
+a live order book, so the third feature of this controller -- the order book imbalance (OBI) fill-kill in
+`executors_to_early_stop` -- is NEVER exercised by this backtest. The controller's `_get_depth_snapshot`
+catches the resulting "no order book" error and treats depth as 0 in that case, so this backtest runs to
+completion (rather than crashing) -- it just means OBI never fires here, by design. This script only
+validates the NATR dynamic-spread and inventory-skew logic. Validate the OBI fill-kill path via
 `test/hummingbot/strategy_v2/controllers/test_pmm_adaptive_v1.py` (synthetic order book snapshots) and via
 paper trading (`<connector>_paper_trade`) before trusting it live.
 
