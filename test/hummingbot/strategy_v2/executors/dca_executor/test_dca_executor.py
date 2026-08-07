@@ -3,6 +3,7 @@ from test.isolated_asyncio_wrapper_test_case import IsolatedAsyncioWrapperTestCa
 from test.logger_mixin_for_test import LoggerMixinForTest
 from unittest.mock import MagicMock, PropertyMock, patch
 
+from hummingbot.connector.exchange.paper_trade import create_paper_trade_market
 from hummingbot.connector.exchange_py_base import ExchangePyBase
 from hummingbot.connector.trading_rule import TradingRule
 from hummingbot.core.data_type.common import OrderType, TradeType
@@ -697,3 +698,34 @@ class TestDCAExecutor(IsolatedAsyncioWrapperTestCase, LoggerMixinForTest):
         self.assertEqual(executor.status, RunnableStatus.TERMINATED)
         held_ids = {order["client_order_id"] for order in executor._held_position_orders}
         self.assertEqual(held_ids, {"OID-DCA-1"})
+
+    def test_construction_against_real_paper_trade_exchange_does_not_raise(self):
+        """
+        Regression test for AttributeError: 'PaperTradeExchange' object has no attribute 'trading_rules'.
+
+        DCAExecutor is the one executor that also reads `connector.trading_rules[trading_pair]` directly
+        (is_any_amount_lower_than_min_order_size, place_close_order) in addition to the shared
+        get_trading_rules() helper used at construction time, so it needs its own real-connector regression
+        test alongside PositionExecutor's -- a mocked connector (as every other test in this file uses) never
+        exercises the actual PaperTradeExchange class and so wouldn't have caught this bug.
+        """
+        paper_exchange = create_paper_trade_market(exchange_name="binance", trading_pairs=["ETH-USDT"])
+        paper_exchange._trading_rules = {"ETH-USDT": TradingRule(trading_pair="ETH-USDT",
+                                                                  min_order_size=Decimal("0.0001"))}
+        paper_exchange._trading_rules_initialized = True
+
+        strategy = self.create_mock_strategy()
+        strategy.connectors = {"binance": paper_exchange}
+        config = DCAExecutorConfig(id="test", timestamp=123, side=TradeType.BUY, connector_name="binance",
+                                   trading_pair="ETH-USDT",
+                                   amounts_quote=[Decimal(10), Decimal(20), Decimal(30)],
+                                   prices=[Decimal(100), Decimal(80), Decimal(60)])
+
+        executor = DCAExecutor(strategy, config, self.update_interval)
+
+        # Unlike PositionExecutor, DCAExecutor doesn't cache trading rules onto an instance
+        # attribute -- it reads `connector.trading_rules[trading_pair]` directly where needed, so
+        # assert via the same get_trading_rules() helper construction uses instead.
+        self.assertEqual(paper_exchange.trading_rules["ETH-USDT"],
+                          executor.get_trading_rules(config.connector_name, config.trading_pair))
+        self.assertFalse(executor.is_any_amount_lower_than_min_order_size())

@@ -2,6 +2,7 @@ from decimal import Decimal
 from test.isolated_asyncio_wrapper_test_case import IsolatedAsyncioWrapperTestCase
 from unittest.mock import MagicMock, PropertyMock, patch
 
+from hummingbot.connector.exchange.paper_trade import create_paper_trade_market
 from hummingbot.connector.exchange_py_base import ExchangePyBase
 from hummingbot.connector.trading_rule import TradingRule
 from hummingbot.core.data_type.common import OrderType, PositionAction, PositionMode, TradeType
@@ -956,3 +957,25 @@ class TestPositionExecutor(IsolatedAsyncioWrapperTestCase):
         self.assertEqual(executor.status, RunnableStatus.TERMINATED)
         held_ids = {order["client_order_id"] for order in executor._held_position_orders}
         self.assertEqual(held_ids, {"OID-ENTRY"})
+
+    def test_construction_against_real_paper_trade_exchange_does_not_raise(self):
+        """
+        Regression test for AttributeError: 'PaperTradeExchange' object has no attribute 'trading_rules'.
+
+        Every other test in this file mocks the connector with `MagicMock(spec=ExchangePyBase)`, which always
+        has a `trading_rules` attribute (real or mocked) and so never exercises the actual PaperTradeExchange
+        class -- meaning none of them would have caught this bug. This test builds a real PaperTradeExchange
+        (as `create_connector` does for any `*_paper_trade` connector name) and asserts construction succeeds.
+        """
+        paper_exchange = create_paper_trade_market(exchange_name="binance", trading_pairs=["ETH-USDT"])
+        paper_exchange._trading_rules = {"ETH-USDT": TradingRule(trading_pair="ETH-USDT",
+                                                                  min_order_size=Decimal("0.0001"))}
+        paper_exchange._trading_rules_initialized = True
+
+        strategy = self.create_mock_strategy
+        strategy.connectors = {"binance": paper_exchange}
+        position_config = self.get_position_config_market_long()
+
+        executor = PositionExecutor(strategy, position_config)
+
+        self.assertEqual(paper_exchange.trading_rules["ETH-USDT"], executor.trading_rules)
