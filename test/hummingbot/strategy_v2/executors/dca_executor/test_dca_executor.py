@@ -723,5 +723,9 @@ class TestDCAExecutor(IsolatedAsyncioWrapperTestCase, LoggerMixinForTest):
 
         executor = DCAExecutor(strategy, config, self.update_interval)
 
-        self.assertEqual(paper_exchange.trading_rules["ETH-USDT"], executor.trading_rules)
+        # Unlike PositionExecutor, DCAExecutor doesn't cache trading rules onto an instance
+        # attribute -- it reads `connector.trading_rules[trading_pair]` directly where needed, so
+        # assert via the same get_trading_rules() helper construction uses instead.
+        self.assertEqual(paper_exchange.trading_rules["ETH-USDT"],
+                          executor.get_trading_rules(config.connector_name, config.trading_pair))
         self.assertFalse(executor.is_any_amount_lower_than_min_order_size())
