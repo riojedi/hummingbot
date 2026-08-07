@@ -4,7 +4,7 @@ import re
 from abc import ABC, abstractmethod
 from decimal import Decimal
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Union
 
 from pydantic import ConfigDict, Field, SecretStr, field_validator, model_validator
 from tabulate import tabulate_formats
@@ -28,6 +28,7 @@ from hummingbot.connector.exchange.kucoin.kucoin_utils import KuCoinConfigMap
 from hummingbot.core.rate_oracle.rate_oracle import RATE_ORACLE_SOURCES, RateOracle
 from hummingbot.core.rate_oracle.sources.rate_source_base import RateSourceBase
 from hummingbot.core.utils.kill_switch import ActiveKillSwitch, KillSwitch, PassThroughKillSwitch
+from hummingbot.notifier.notifier_base import NotifierBase
 
 if TYPE_CHECKING:
     from hummingbot.core.trading_core import TradingCore
@@ -261,6 +262,46 @@ class KillSwitchDisabledMode(KillSwitchMode):
 KILL_SWITCH_MODES = {
     KillSwitchEnabledMode.model_config["title"]: KillSwitchEnabledMode,
     KillSwitchDisabledMode.model_config["title"]: KillSwitchDisabledMode,
+}
+
+
+class TelegramMode(BaseClientModel, ABC):
+    @abstractmethod
+    def get_notifier(self, trading_core: "TradingCore") -> Optional[NotifierBase]:
+        ...
+
+
+class TelegramEnabledMode(TelegramMode):
+    telegram_token: SecretStr = Field(
+        default=SecretStr(""),
+        json_schema_extra={"prompt": lambda cm: "What is your Telegram bot token? (from @BotFather)", "is_secure": True},
+    )
+    telegram_chat_id: str = Field(
+        default="",
+        json_schema_extra={"prompt": lambda cm: "What is your Telegram chat ID?"},
+    )
+    model_config = ConfigDict(title="telegram_enabled")
+
+    def get_notifier(self, trading_core: "TradingCore") -> NotifierBase:
+        from hummingbot.notifier.telegram_notifier import TelegramNotifier
+        return TelegramNotifier(
+            token=self.telegram_token.get_secret_value(),
+            chat_id=self.telegram_chat_id,
+            connectors=list(trading_core.connectors.values()),
+            trading_core=trading_core,
+        )
+
+
+class TelegramDisabledMode(TelegramMode):
+    model_config = ConfigDict(title="telegram_disabled")
+
+    def get_notifier(self, trading_core: "TradingCore") -> None:
+        return None
+
+
+TELEGRAM_MODES = {
+    TelegramEnabledMode.model_config["title"]: TelegramEnabledMode,
+    TelegramDisabledMode.model_config["title"]: TelegramDisabledMode,
 }
 
 
@@ -784,6 +825,10 @@ class ClientConfigMap(BaseClientModel):
         default=KillSwitchDisabledMode(),
         json_schema_extra={"prompt": lambda cm: f"Select the desired kill-switch mode ({'/'.join(list(KILL_SWITCH_MODES.keys()))})"},
     )
+    telegram_mode: Union[tuple(TELEGRAM_MODES.values())] = Field(
+        default=TelegramDisabledMode(),
+        json_schema_extra={"prompt": lambda cm: f"Select the desired telegram mode ({'/'.join(list(TELEGRAM_MODES.keys()))})"},
+    )
     autofill_import: AutofillImportEnum = Field(
         default=AutofillImportEnum.disabled,
         description="What to auto-fill in the prompt after each import command (start/config)",
@@ -912,6 +957,33 @@ class ClientConfigMap(BaseClientModel):
             return KILL_SWITCH_MODES[v].model_construct()
 
         raise ValueError(f"Unsupported type for kill switch mode: {type(v)}")
+
+    @field_validator("telegram_mode", mode="before")
+    @classmethod
+    def validate_telegram_mode(cls, v: Any):
+        if isinstance(v, tuple(TELEGRAM_MODES.values())):
+            return v  # Already a valid model
+
+        if v == {}:
+            return TelegramDisabledMode()
+
+        if isinstance(v, dict):
+            # Try validating against known mode models
+            for mode_cls in TELEGRAM_MODES.values():
+                try:
+                    return mode_cls.model_validate(v)
+                except Exception:
+                    continue
+            raise ValueError(f"Could not match dict to any known telegram mode: {v}")
+
+        if isinstance(v, str):
+            if v not in TELEGRAM_MODES:
+                raise ValueError(
+                    f"Invalid telegram mode string. Choose from: {list(TELEGRAM_MODES.keys())}."
+                )
+            return TELEGRAM_MODES[v].model_construct()
+
+        raise ValueError(f"Unsupported type for telegram mode: {type(v)}")
 
     @field_validator("autofill_import", mode="before")
     @classmethod
