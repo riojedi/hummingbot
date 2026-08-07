@@ -16,6 +16,7 @@ from hummingbot.connector.budget_checker import BudgetChecker
 from hummingbot.connector.connector_metrics_collector import DummyMetricsCollector
 from hummingbot.connector.exchange.paper_trade.trading_pair import TradingPair
 from hummingbot.connector.exchange_base import ExchangeBase
+from hummingbot.connector.trading_rule import TradingRule
 from hummingbot.core.clock cimport Clock
 from hummingbot.core.clock import Clock
 from hummingbot.core.data_type.cancellation_result import CancellationResult
@@ -168,6 +169,9 @@ cdef class PaperTradeExchange(ExchangeBase):
         self._account_available_balances = {}
         self._paper_trade_market_initialized = False
         self._trading_pairs = {}
+        self._trading_rules = {}
+        self._trading_rules_initialized = False
+        self._trading_rules_update_task = None
         self._queued_orders = deque()
         self._quantization_params = {}
         self._order_book_trade_listener = OrderBookTradeListener(self)
@@ -210,6 +214,10 @@ cdef class PaperTradeExchange(ExchangeBase):
         return [trading_pair for trading_pair in self._trading_pairs]
 
     @property
+    def trading_rules(self) -> Dict[str, TradingRule]:
+        return self._trading_rules
+
+    @property
     def name(self) -> str:
         return self._exchange_name
 
@@ -230,6 +238,8 @@ cdef class PaperTradeExchange(ExchangeBase):
     @property
     def ready(self):
         if not self.order_book_tracker.ready:
+            return False
+        if not self._trading_rules_initialized:
             return False
         if all(self.status_dict.values()):
             if not self._paper_trade_market_initialized:
@@ -300,9 +310,45 @@ cdef class PaperTradeExchange(ExchangeBase):
     async def start_network(self):
         await self.stop_network()
         self.order_book_tracker.start()
+        self._trading_rules_update_task = safe_ensure_future(self._update_paper_trade_trading_rules())
 
     async def stop_network(self):
         self.order_book_tracker.stop()
+        if self._trading_rules_update_task is not None:
+            self._trading_rules_update_task.cancel()
+            self._trading_rules_update_task = None
+
+    async def _update_paper_trade_trading_rules(self):
+        """
+        Fetches real trading rules for this paper trade exchange from a throwaway, non-trading instance
+        of the underlying real connector class, mirroring the pattern used by
+        BacktestingDataProvider.initialize_trading_rules(). V2 strategy executors (PositionExecutor,
+        GridExecutor, TwapExecutor, DcaExecutor) read `self.connectors[connector_name].trading_rules[trading_pair]`
+        directly at construction time, so this must complete (success or failure) before `ready` reports True --
+        see the `ready` property below.
+
+        Failures are logged and swallowed -- paper trading still starts, with trading_rules left empty, rather
+        than blocking startup indefinitely on a rules endpoint outage; an executor that then looks up a missing
+        trading pair will raise a clear KeyError instead of this method raising an unhandled exception here.
+        """
+        from hummingbot.client.settings import AllConnectorSettings
+        try:
+            conn_setting = AllConnectorSettings.get_connector_settings()[self._exchange_name]
+            rules_connector = conn_setting.non_trading_connector_instance_with_default_configuration(
+                trading_pairs=[])
+            await rules_connector._update_trading_rules()
+            self._trading_rules = dict(rules_connector.trading_rules)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            self.logger().warning(
+                f"Error fetching trading rules for paper trade exchange '{self._exchange_name}'. "
+                f"Executors reading trading_rules for a specific trading pair may raise a KeyError "
+                f"until this is resolved.",
+                exc_info=True,
+            )
+        finally:
+            self._trading_rules_initialized = True
 
     async def check_network(self) -> NetworkStatus:
         return NetworkStatus.CONNECTED
