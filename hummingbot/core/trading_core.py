@@ -101,6 +101,7 @@ class TradingCore:
 
         # Supporting components
         self.notifiers: List[NotifierBase] = []
+        self.telegram_notifier: Optional[NotifierBase] = None
         self.kill_switch: Optional[KillSwitch] = None
         self.markets_recorder: Optional[MarketsRecorder] = None
         self.trade_fill_db: Optional[SQLConnectionManager] = None
@@ -542,6 +543,14 @@ class TradingCore:
                         self.logger().debug(f"Initializing metrics collector for {connector_name} (created outside normal flow)")
                         self._initialize_metrics_for_connector(connector, connector_name)
 
+            # Initialize telegram notifications if enabled -- before kill switch, so kill-switch-triggered
+            # notify() calls have somewhere to go by the time the kill switch could possibly fire.
+            if (self._trading_required and
+                    self.client_config_map.telegram_mode.model_config.get("title") == "telegram_enabled"):
+                self.telegram_notifier = self.client_config_map.telegram_mode.get_notifier(self)
+                self.add_notifier(self.telegram_notifier)
+                self.telegram_notifier.start()
+
             # Initialize kill switch if enabled
             if (self._trading_required and
                     self.client_config_map.kill_switch_mode.model_config.get("title") == "kill_switch_enabled"):
@@ -585,6 +594,11 @@ class TradingCore:
             if self.clock is not None and self.kill_switch is not None:
                 self.kill_switch.stop()
 
+            # Stop telegram notifier
+            if self.telegram_notifier is not None:
+                self.telegram_notifier.stop()
+                self.notifiers.remove(self.telegram_notifier)
+
             # Stop rate oracle
             RateOracle.get_instance().stop()
 
@@ -592,6 +606,7 @@ class TradingCore:
             self.strategy = None
             self.strategy_task = None
             self.kill_switch = None
+            self.telegram_notifier = None
             self._strategy_running = False
 
             self.logger().info("Strategy stopped successfully")
